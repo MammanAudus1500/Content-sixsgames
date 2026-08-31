@@ -7,8 +7,7 @@ from google.genai import types
 
 
 # ============================================================
-# SIXSCONTENT - ON DEMAND TELEGRAM BOT
-# One GitHub Action run handles one content request, then exits.
+# SIXSCONTENT - ON-DEMAND TELEGRAM CONTENT BOT
 # ============================================================
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -16,10 +15,11 @@ GEMINI_KEY = os.environ["GEMINI_API_KEY"]
 
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-GEMINI_MODEL = "gemini-2.5-flash"
+# Current Gemini model
+GEMINI_MODEL = "gemini-3.6-flash"
 
-# How long GitHub waits for your Telegram command.
-# After this time, the bot shuts down automatically.
+# Maximum time this GitHub runner stays alive waiting
+# for a Telegram command.
 WAIT_TIME_SECONDS = 10 * 60
 
 
@@ -68,7 +68,7 @@ def send_message(chat_id, text):
 
 
 # ============================================================
-# GEMINI
+# GEMINI CONTENT GENERATOR
 # ============================================================
 
 def generate_content(category):
@@ -141,7 +141,7 @@ Write the complete narration for the video.
 Make it conversational and engaging.
 
 VISUALS:
-Give 6 simple visual directions for the video.
+Give 6 simple visual directions.
 Number them 1 to 6.
 
 CAPTION:
@@ -163,7 +163,6 @@ Do not use excessive emojis.
             model=GEMINI_MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(
-                temperature=0.9,
                 automatic_function_calling=types.AutomaticFunctionCallingConfig(
                     disable=True
                 )
@@ -177,7 +176,9 @@ Do not use excessive emojis.
 
     except Exception as error:
 
-        print("GEMINI ERROR:")
+        print("========================================")
+        print("GEMINI ERROR")
+        print("========================================")
         print(repr(error))
 
         return None, str(error)
@@ -218,7 +219,8 @@ Available commands:
 /create world
 /create science
 
-This GitHub session will automatically stop after the job is finished."""
+This GitHub session is temporary.
+It will stop automatically after the job is finished."""
         )
 
         return "continue"
@@ -278,7 +280,6 @@ science"""
 
         return "continue"
 
-    # Tell the user that generation has started.
     send_message(
         chat_id,
         f"""🧠 Creating your {category} video...
@@ -325,14 +326,15 @@ The GitHub session will now stop."""
 
 GitHub will now shut down this session.
 
-When you want another piece of content, start the GitHub Action again."""
+When you want another piece of content,
+start the GitHub Action again."""
     )
 
     return "done"
 
 
 # ============================================================
-# WAIT FOR TELEGRAM
+# MAIN BOT
 # ============================================================
 
 def main():
@@ -344,7 +346,10 @@ def main():
     print("Waiting for Telegram command...")
     print(f"Maximum waiting time: {WAIT_TIME_SECONDS} seconds")
 
-    # Check Telegram connection.
+    # --------------------------------------------------------
+    # Check Telegram
+    # --------------------------------------------------------
+
     try:
 
         me = requests.get(
@@ -357,19 +362,20 @@ def main():
         bot_info = me.json()
 
         print("Telegram connection: OK")
-        print("Bot:", bot_info["result"].get("username"))
+        print(
+            "Bot:",
+            bot_info["result"].get("username")
+        )
 
     except Exception as error:
 
         print("Telegram connection failed:")
         print(repr(error))
+
         return
 
     # --------------------------------------------------------
-    # Get the latest update ID first.
-    #
-    # This prevents an old Telegram message from a previous
-    # GitHub run from accidentally triggering this run.
+    # Ignore old Telegram messages
     # --------------------------------------------------------
 
     try:
@@ -390,20 +396,13 @@ def main():
 
         print("Could not initialize Telegram polling:")
         print(repr(error))
+
         return
 
     start_time = time.time()
 
     # --------------------------------------------------------
-    # Temporary polling loop.
-    #
-    # IMPORTANT:
-    # This is NOT a 24/7 loop.
-    #
-    # It automatically exits after:
-    # - one successful /create command
-    # - one failed generation
-    # - 10 minutes with no command
+    # TEMPORARY SESSION
     # --------------------------------------------------------
 
     while True:
@@ -460,8 +459,10 @@ def main():
 
                 if result == "done":
 
-                    print("Job completed.")
-                    print("SixsContent session shutting down.")
+                    print("========================================")
+                    print("JOB COMPLETED")
+                    print("GitHub session shutting down.")
+                    print("========================================")
 
                     return
 
