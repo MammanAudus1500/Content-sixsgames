@@ -1,202 +1,206 @@
 import os
+import time
 import requests
+
 from google import genai
 from google.genai import types
 
+
 # ============================================================
-# SIXSCONTENT BOT
-# Telegram + Gemini
+# SIXSCONTENT - ON DEMAND TELEGRAM BOT
+# One GitHub Action run handles one content request, then exits.
 # ============================================================
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 GEMINI_KEY = os.environ["GEMINI_API_KEY"]
 
-TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# Gemini client
+GEMINI_MODEL = "gemini-2.5-flash"
+
+# How long GitHub waits for your Telegram command.
+# After this time, the bot shuts down automatically.
+WAIT_TIME_SECONDS = 10 * 60
+
+
 client = genai.Client(api_key=GEMINI_KEY)
 
-MODEL = "gemini-2.5-flash"
-
 
 # ============================================================
-# TELEGRAM FUNCTIONS
+# TELEGRAM
 # ============================================================
 
-def send_message(chat_id, text):
-    try:
-        requests.post(
-            f"{TELEGRAM_URL}/sendMessage",
-            json={
-                "chat_id": chat_id,
-                "text": text,
-            },
-            timeout=30,
-        )
-    except Exception as e:
-        print("Telegram error:", e)
+def telegram_get_updates(offset=None):
 
-
-def get_updates(offset=None):
     params = {
-        "timeout": 30,
+        "timeout": 20
     }
 
     if offset is not None:
         params["offset"] = offset
 
     response = requests.get(
-        f"{TELEGRAM_URL}/getUpdates",
+        f"{TELEGRAM_API}/getUpdates",
         params=params,
-        timeout=40,
+        timeout=30
     )
+
+    response.raise_for_status()
 
     return response.json()
 
 
+def send_message(chat_id, text):
+
+    if len(text) > 4000:
+        text = text[:3950] + "\n\n[Message shortened]"
+
+    response = requests.post(
+        f"{TELEGRAM_API}/sendMessage",
+        json={
+            "chat_id": chat_id,
+            "text": text
+        },
+        timeout=30
+    )
+
+    response.raise_for_status()
+
+
 # ============================================================
-# GEMINI CONTENT GENERATOR
+# GEMINI
 # ============================================================
 
-def create_content(category):
+def generate_content(category):
 
-    category_prompts = {
+    category_description = {
+
         "body": """
-Create a viral short-form video about the human body.
-
-Focus on:
-- surprising body facts
-- health/science curiosity
-- things people experience but don't understand
-
-Do NOT give medical diagnosis or dangerous medical advice.
+Create an interesting viral short-form video about the human body,
+health science, anatomy, or surprising body facts.
+Do not diagnose diseases or give dangerous medical advice.
 """,
 
         "money": """
-Create a viral short-form video about money.
-
-Focus on:
-- money psychology
-- financial habits
-- surprising money facts
-- business ideas
-- common financial mistakes
-
-Do not promise guaranteed profits.
+Create an interesting viral short-form video about money,
+money psychology, business, financial habits, or surprising
+financial facts.
+Do not promise guaranteed profits or present risky financial
+advice as guaranteed.
 """,
 
         "psychology": """
-Create a viral short-form video about psychology.
-
-Focus on:
-- human behavior
-- social psychology
-- habits
-- relationships
-- surprising psychological effects
-
-Make it interesting and easy to understand.
+Create an interesting viral short-form video about psychology,
+human behavior, habits, social behavior, relationships, or
+surprising psychological effects.
 """,
 
         "world": """
-Create a viral short-form video about the world.
-
-Focus on:
-- strange places
-- unusual countries
-- history
-- geography
-- surprising facts
-- things most people don't know
+Create an interesting viral short-form video about the world,
+geography, countries, history, unusual places, cultures,
+or surprising facts about our planet.
 """,
 
         "science": """
-Create a viral short-form video about science.
-
-Focus on:
-- space
-- physics
-- animals
-- technology
-- nature
-- surprising scientific facts
-
-Make the explanation simple enough for a general audience.
+Create an interesting viral short-form video about science,
+space, animals, physics, technology, nature, or surprising
+scientific discoveries.
 """
     }
 
-    selected_prompt = category_prompts.get(category)
-
-    if not selected_prompt:
-        return None
-
     prompt = f"""
-You are the content creator for SixsContent.
+You are the main content creator for SixsContent.
 
-{selected_prompt}
+CATEGORY:
+{category}
 
-Create ONE highly engaging short-form video concept.
+TOPIC DIRECTION:
+{category_description[category]}
 
-The video should be suitable for TikTok, YouTube Shorts and Instagram Reels.
+Create ONE highly engaging short-form video.
 
-Return EXACTLY this format:
+The content will be used for TikTok, YouTube Shorts and Instagram Reels.
+
+Make it:
+- attention-grabbing
+- easy to understand
+- factual
+- suitable for a general audience
+- approximately 30-60 seconds when narrated
+
+Return exactly this format:
 
 TITLE:
-[short viral title]
+A short clickable title.
 
 HOOK:
-[one powerful opening sentence]
+A powerful first sentence that makes people want to keep watching.
 
 SCRIPT:
-[30-60 second narration. Make it conversational and easy to understand.]
+Write the complete narration for the video.
+Make it conversational and engaging.
 
 VISUALS:
-[5-8 simple visual ideas that could be used while the narration plays]
+Give 6 simple visual directions for the video.
+Number them 1 to 6.
 
 CAPTION:
-[short social-media caption]
+Write a short social-media caption.
 
 HASHTAGS:
-[5-8 relevant hashtags]
+Give 8 relevant hashtags.
 
-Rules:
-- Do not use emojis excessively.
-- Do not invent fake statistics.
-- Do not claim something is scientifically proven if it is not.
-- Make the hook immediately interesting.
-- Keep the script easy to narrate.
-- Make the content original.
+IMPORTANT:
+Do not invent statistics.
+Do not claim something is scientifically proven unless it is established.
+Do not give dangerous medical or financial instructions.
+Do not use excessive emojis.
 """
 
     try:
+
         response = client.models.generate_content(
-            model=MODEL,
+            model=GEMINI_MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(
                 temperature=0.9,
                 automatic_function_calling=types.AutomaticFunctionCallingConfig(
                     disable=True
-                ),
-            ),
+                )
+            )
         )
 
-        if response.text:
-            return response.text.strip()
+        if not response.text:
+            return None, "Gemini returned an empty response."
 
-        return "Gemini returned an empty response."
+        return response.text.strip(), None
 
-    except Exception as e:
-        print("Gemini error:", repr(e))
-        return f"ERROR: {str(e)}"
+    except Exception as error:
+
+        print("GEMINI ERROR:")
+        print(repr(error))
+
+        return None, str(error)
 
 
 # ============================================================
-# COMMAND HANDLER
+# COMMAND PROCESSING
 # ============================================================
 
-def handle_message(chat_id, text):
+VALID_CATEGORIES = {
+    "body",
+    "money",
+    "psychology",
+    "world",
+    "science"
+}
+
+
+def process_command(chat_id, text):
 
     text = text.strip()
+
+    print(f"Telegram command received: {text}")
 
     if text == "/start":
 
@@ -204,9 +208,9 @@ def handle_message(chat_id, text):
             chat_id,
             """🔥 Welcome to SixsContent!
 
-Your automated content machine is ready.
+Your on-demand content machine is ready.
 
-Use:
+Available commands:
 
 /create body
 /create money
@@ -214,24 +218,35 @@ Use:
 /create world
 /create science
 
-Example:
-
-/create body
-
-The bot will create a complete short-video concept for you."""
+This GitHub session will automatically stop after the job is finished."""
         )
 
-        return
+        return "continue"
 
-    if text.startswith("/create"):
+    if not text.startswith("/create"):
 
-        parts = text.split()
+        send_message(
+            chat_id,
+            """❌ Unknown command.
 
-        if len(parts) < 2:
+Use:
 
-            send_message(
-                chat_id,
-                """Please choose a category.
+/create body
+/create money
+/create psychology
+/create world
+/create science"""
+        )
+
+        return "continue"
+
+    parts = text.split()
+
+    if len(parts) != 2:
+
+        send_message(
+            chat_id,
+            """❌ Please choose one category.
 
 Examples:
 
@@ -240,104 +255,179 @@ Examples:
 /create psychology
 /create world
 /create science"""
-            )
+        )
 
-            return
+        return "continue"
 
-        category = parts[1].lower()
+    category = parts[1].lower()
 
-        valid_categories = [
-            "body",
-            "money",
-            "psychology",
-            "world",
-            "science",
-        ]
+    if category not in VALID_CATEGORIES:
 
-        if category not in valid_categories:
+        send_message(
+            chat_id,
+            """❌ Invalid category.
 
-            send_message(
-                chat_id,
-                """❌ Unknown category.
-
-Available categories:
+Available:
 
 body
 money
 psychology
 world
 science"""
-            )
+        )
 
-            return
+        return "continue"
 
-        send_message(
-            chat_id,
-            f"""🧠 Creating your {category} video...
+    # Tell the user that generation has started.
+    send_message(
+        chat_id,
+        f"""🧠 Creating your {category} video...
 
-Gemini is generating the idea, hook, script and visuals.
+Gemini is preparing:
+
+• Title
+• Hook
+• Script
+• Visual directions
+• Caption
+• Hashtags
 
 Please wait..."""
-        )
+    )
 
-        result = create_content(category)
+    content, error = generate_content(category)
 
-        if result.startswith("ERROR:"):
+    if error:
 
-            send_message(
-                chat_id,
-                """❌ Gemini error occurred.
-
-The request failed.
-
-Check the GitHub Actions log for the exact error."""
-            )
-
-            return
+        print("GENERATION FAILED:")
+        print(error)
 
         send_message(
             chat_id,
-            "🔥 SIXSCONTENT VIDEO\n\n" + result
+            f"""❌ Gemini failed to create the content.
+
+Error:
+{error}
+
+The GitHub session will now stop."""
         )
 
-        return
+        return "done"
 
     send_message(
         chat_id,
-        """I don't understand that command.
-
-Use:
-
-/start
-
-or
-
-/create body
-/create money
-/create psychology
-/create world
-/create science"""
+        "🔥 SIXSCONTENT RESULT\n\n" + content
     )
+
+    send_message(
+        chat_id,
+        """✅ Content created successfully.
+
+GitHub will now shut down this session.
+
+When you want another piece of content, start the GitHub Action again."""
+    )
+
+    return "done"
 
 
 # ============================================================
-# MAIN BOT LOOP
+# WAIT FOR TELEGRAM
 # ============================================================
 
 def main():
 
-    print("🔥 SixsContent Bot started")
+    print("========================================")
+    print("🔥 SIXSCONTENT ON-DEMAND BOT")
+    print("========================================")
+    print("Bot started.")
+    print("Waiting for Telegram command...")
+    print(f"Maximum waiting time: {WAIT_TIME_SECONDS} seconds")
 
-    offset = None
+    # Check Telegram connection.
+    try:
+
+        me = requests.get(
+            f"{TELEGRAM_API}/getMe",
+            timeout=20
+        )
+
+        me.raise_for_status()
+
+        bot_info = me.json()
+
+        print("Telegram connection: OK")
+        print("Bot:", bot_info["result"].get("username"))
+
+    except Exception as error:
+
+        print("Telegram connection failed:")
+        print(repr(error))
+        return
+
+    # --------------------------------------------------------
+    # Get the latest update ID first.
+    #
+    # This prevents an old Telegram message from a previous
+    # GitHub run from accidentally triggering this run.
+    # --------------------------------------------------------
+
+    try:
+
+        initial = telegram_get_updates()
+
+        updates = initial.get("result", [])
+
+        if updates:
+
+            offset = updates[-1]["update_id"] + 1
+
+        else:
+
+            offset = None
+
+    except Exception as error:
+
+        print("Could not initialize Telegram polling:")
+        print(repr(error))
+        return
+
+    start_time = time.time()
+
+    # --------------------------------------------------------
+    # Temporary polling loop.
+    #
+    # IMPORTANT:
+    # This is NOT a 24/7 loop.
+    #
+    # It automatically exits after:
+    # - one successful /create command
+    # - one failed generation
+    # - 10 minutes with no command
+    # --------------------------------------------------------
 
     while True:
 
+        elapsed = time.time() - start_time
+
+        if elapsed >= WAIT_TIME_SECONDS:
+
+            print("No command received.")
+            print("GitHub session is shutting down.")
+
+            return
+
         try:
 
-            data = get_updates(offset)
+            data = telegram_get_updates(offset)
 
             if not data.get("ok"):
-                print("Telegram API error:", data)
+
+                print("Telegram returned an error:")
+                print(data)
+
+                time.sleep(3)
+
                 continue
 
             updates = data.get("result", [])
@@ -363,22 +453,36 @@ def main():
                 if not text:
                     continue
 
-                print(
-                    f"Message from {chat_id}: {text}"
-                )
-
-                handle_message(
+                result = process_command(
                     chat_id,
                     text
                 )
 
-        except Exception as e:
+                if result == "done":
 
-            print(
-                "Bot loop error:",
-                repr(e)
-            )
+                    print("Job completed.")
+                    print("SixsContent session shutting down.")
 
+                    return
+
+        except requests.exceptions.RequestException as error:
+
+            print("Telegram network error:")
+            print(repr(error))
+
+            time.sleep(5)
+
+        except Exception as error:
+
+            print("BOT ERROR:")
+            print(repr(error))
+
+            time.sleep(5)
+
+
+# ============================================================
+# START
+# ============================================================
 
 if __name__ == "__main__":
     main()
