@@ -5,9 +5,13 @@ on:
 
 jobs:
   run-bot:
+
     runs-on: ubuntu-latest
 
+    timeout-minutes: 12
+
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -20,8 +24,9 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Start SixsContent Bot
+      - name: Run SixsContent Bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python bot.py
+        run: |
+          python bot.py
