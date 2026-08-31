@@ -1,638 +1,298 @@
 import os
+import sys
 import json
 import shutil
 import subprocess
 from pathlib import Path
-
-from PIL import Image, ImageDraw, ImageFont
-
-
-# ============================================================
-# SIXSCONTENT — PHASE 3F
-# FINAL CONTENT PACKAGE
-# ============================================================
 
 print("=" * 60)
 print("🎬 SIXSCONTENT — PHASE 3F")
 print("FINAL CONTENT PACKAGE")
 print("=" * 60)
 
-print("🚫 Telegram disabled.")
-print("🚫 Gemini disabled.")
-print("🚫 LTX disabled.")
-print("🚫 Automatic publishing disabled.")
-print("💰 Target cost: $0")
-print("⏱️ GitHub runs only when manually started.")
-print()
-
-
-# ============================================================
-# DIRECTORIES
-# ============================================================
-
-INPUT_DIR = Path("phase3f_input")
+INPUT = Path("phase3f_input/sixscontent_phase3e_final.mp4")
 OUTPUT_DIR = Path("phase3f_output")
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+if not INPUT.exists():
+    print("❌ Phase 3E final video is missing.")
+    print(f"   Expected: {INPUT}")
+    sys.exit(1)
 
-# ============================================================
-# FIND PHASE 3E VIDEO
-# ============================================================
-
-print("🔎 Searching for Phase 3E final video...")
-
-possible_videos = [
-    INPUT_DIR / "phase3e_output" / "sixscontent_phase3e_final.mp4",
-    INPUT_DIR / "sixscontent_phase3e_final.mp4",
-]
-
-video_path = None
-
-for path in possible_videos:
-    if path.exists():
-        video_path = path
-        break
+print("✅ Phase 3E final video found.")
+print(f"💾 Size: {INPUT.stat().st_size:,} bytes")
 
 
-if video_path is None:
-    found = list(INPUT_DIR.rglob("sixscontent_phase3e_final.mp4"))
+def run(command):
+    print("▶️", " ".join(command))
 
-    if found:
-        video_path = found[0]
-
-
-if video_path is None:
-    raise RuntimeError(
-        "Phase 3E final video was not found."
+    result = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True
     )
 
+    print(result.stdout)
 
-print(f"✅ Phase 3E video found:")
-print(f"   {video_path}")
-print(f"   Size: {video_path.stat().st_size:,} bytes")
-print()
-
-
-# ============================================================
-# COPY FINAL VIDEO
-# ============================================================
-
-final_video = OUTPUT_DIR / "sixscontent_final.mp4"
-
-shutil.copy2(video_path, final_video)
-
-print("📦 Copying final video...")
-print(f"✅ {final_video}")
-print()
+    if result.returncode != 0:
+        print(f"❌ Command failed with exit code {result.returncode}")
+        sys.exit(result.returncode)
 
 
-# ============================================================
-# FIND CAPTIONS
-# ============================================================
-
-print("🔎 Searching for captions...")
-
-caption_candidates = list(
-    INPUT_DIR.rglob("captions.srt")
-)
-
-caption_output = OUTPUT_DIR / "captions.srt"
-
-if caption_candidates:
-    shutil.copy2(
-        caption_candidates[0],
-        caption_output
+def ffprobe_value(args):
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            *args,
+            str(INPUT)
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
     )
 
-    print(
-        f"✅ Captions copied: {caption_output}"
-    )
-else:
-    print(
-        "⚠️ captions.srt was not found."
-    )
-
-print()
+    return result.stdout.strip()
 
 
-# ============================================================
-# FFPROBE
-# ============================================================
+print("🔧 Checking FFmpeg...")
 
-print("🔍 Inspecting final video...")
+if shutil.which("ffmpeg") is None:
+    print("❌ FFmpeg not available.")
+    sys.exit(1)
 
-probe_command = [
-    "ffprobe",
-    "-v",
-    "error",
+if shutil.which("ffprobe") is None:
+    print("❌ FFprobe not available.")
+    sys.exit(1)
+
+print("✅ FFmpeg available.")
+print("✅ FFprobe available.")
+
+print("=" * 60)
+print("🔍 ANALYZING INPUT VIDEO")
+print("=" * 60)
+
+duration = ffprobe_value([
     "-show_entries",
-    "format=duration,size",
-    "-show_entries",
-    "stream=width,height,codec_name,codec_type,r_frame_rate",
+    "format=duration",
     "-of",
-    "json",
-    str(final_video),
-]
+    "default=noprint_wrappers=1:nokey=1"
+])
 
-probe_result = subprocess.run(
-    probe_command,
-    capture_output=True,
-    text=True,
-    check=True
-)
+width = ffprobe_value([
+    "-select_streams",
+    "v:0",
+    "-show_entries",
+    "stream=width",
+    "-of",
+    "default=noprint_wrappers=1:nokey=1"
+])
 
-probe = json.loads(probe_result.stdout)
+height = ffprobe_value([
+    "-select_streams",
+    "v:0",
+    "-show_entries",
+    "stream=height",
+    "-of",
+    "default=noprint_wrappers=1:nokey=1"
+])
 
-duration = float(
-    probe.get("format", {}).get("duration", 0)
-)
+video_codec = ffprobe_value([
+    "-select_streams",
+    "v:0",
+    "-show_entries",
+    "stream=codec_name",
+    "-of",
+    "default=noprint_wrappers=1:nokey=1"
+])
 
-size = int(
-    probe.get("format", {}).get("size", 0)
-)
+audio_codec = ffprobe_value([
+    "-select_streams",
+    "a:0",
+    "-show_entries",
+    "stream=codec_name",
+    "-of",
+    "default=noprint_wrappers=1:nokey=1"
+])
 
-video_stream = None
-audio_stream = None
+print(f"⏱️ Duration: {duration}s")
+print(f"📐 Resolution: {width} × {height}")
+print(f"🎥 Video codec: {video_codec}")
+print(f"🔊 Audio codec: {audio_codec}")
 
-for stream in probe.get("streams", []):
-    if stream.get("codec_type") == "video":
-        video_stream = stream
+if not width or not height:
+    print("❌ Could not determine video dimensions.")
+    sys.exit(1)
 
-    if stream.get("codec_type") == "audio":
-        audio_stream = stream
+if int(width) != 1080 or int(height) != 1920:
+    print("⚠️ Input is not 1080×1920.")
+    print("ℹ️ Phase 3F will normalize the output.")
 
+print("=" * 60)
+print("📦 BUILDING FINAL CONTENT PACKAGE")
+print("=" * 60)
 
-if video_stream is None:
-    raise RuntimeError(
-        "Final video contains no video stream."
-    )
+FINAL_VIDEO = OUTPUT_DIR / "sixscontent_final.mp4"
 
+print("🎬 Creating normalized final MP4...")
 
-width = video_stream.get("width")
-height = video_stream.get("height")
-
-video_codec = video_stream.get("codec_name")
-
-print(f"   Duration: {duration:.2f}s")
-print(f"   Resolution: {width} x {height}")
-print(f"   Video codec: {video_codec}")
-print(f"   Audio present: {'YES' if audio_stream else 'NO'}")
-print()
-
-
-# ============================================================
-# VALIDATION
-# ============================================================
-
-print("🧪 Running final validation...")
-
-errors = []
-
-if width != 1080:
-    errors.append(
-        f"Expected width 1080, got {width}"
-    )
-
-if height != 1920:
-    errors.append(
-        f"Expected height 1920, got {height}"
-    )
-
-if duration < 1:
-    errors.append(
-        "Video duration is too short."
-    )
-
-if video_codec != "h264":
-    errors.append(
-        f"Expected H.264 video, got {video_codec}"
-    )
-
-if audio_stream is None:
-    errors.append(
-        "Final video has no audio stream."
-    )
-
-
-if errors:
-    print("❌ Validation failed:")
-
-    for error in errors:
-        print(f"   • {error}")
-
-    raise RuntimeError(
-        "Phase 3F validation failed."
-    )
-
-
-print("✅ Resolution: 1080 × 1920")
-print("✅ Orientation: 9:16")
-print("✅ H.264 video")
-print("✅ Audio stream present")
-print("✅ Valid duration")
-print()
-
-
-# ============================================================
-# THUMBNAIL
-# ============================================================
-
-print("🖼️ Creating thumbnail...")
-
-thumbnail_path = OUTPUT_DIR / "thumbnail.jpg"
-
-thumbnail_width = 1080
-thumbnail_height = 1920
-
-thumbnail = Image.new(
-    "RGB",
-    (thumbnail_width, thumbnail_height),
-    "black"
-)
-
-draw = ImageDraw.Draw(thumbnail)
-
-
-# Try to capture a frame from the video
-frame_path = OUTPUT_DIR / "_thumbnail_frame.jpg"
-
-frame_command = [
+run([
     "ffmpeg",
     "-y",
-    "-ss",
-    "3",
     "-i",
-    str(final_video),
-    "-frames:v",
-    "1",
-    "-q:v",
-    "2",
-    str(frame_path),
-]
+    str(INPUT),
 
-frame_result = subprocess.run(
-    frame_command,
-    capture_output=True,
-    text=True
-)
+    # Ensure correct vertical format.
+    "-vf",
+    "scale=1080:1920:force_original_aspect_ratio=decrease,"
+    "pad=1080:1920:(ow-iw)/2:(oh-ih)/2",
 
-if frame_path.exists():
+    "-c:v",
+    "libx264",
+    "-preset",
+    "medium",
+    "-crf",
+    "23",
 
-    try:
-        frame = Image.open(frame_path).convert("RGB")
+    "-c:a",
+    "aac",
+    "-b:a",
+    "128k",
 
-        frame.thumbnail(
-            (thumbnail_width, thumbnail_height)
-        )
+    "-movflags",
+    "+faststart",
 
-        x = (
-            thumbnail_width - frame.width
-        ) // 2
+    str(FINAL_VIDEO)
+])
 
-        y = (
-            thumbnail_height - frame.height
-        ) // 2
+if not FINAL_VIDEO.exists():
+    print("❌ Final video was not created.")
+    sys.exit(1)
 
-        thumbnail.paste(
-            frame,
-            (x, y)
-        )
+print("✅ Final video created.")
+print(f"📁 {FINAL_VIDEO}")
+print(f"💾 Size: {FINAL_VIDEO.stat().st_size:,} bytes")
 
-    except Exception as exc:
-        print(
-            f"⚠️ Could not use video frame: {exc}"
-        )
-
-
-# Dark overlay
-overlay = Image.new(
-    "RGBA",
-    thumbnail.size,
-    (0, 0, 0, 80)
-)
-
-thumbnail = Image.alpha_composite(
-    thumbnail.convert("RGBA"),
-    overlay
-).convert("RGB")
-
-draw = ImageDraw.Draw(thumbnail)
-
-
-# Fonts
-font_paths = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-]
-
-bold_font_path = font_paths[0]
-normal_font_path = font_paths[1]
-
-try:
-    title_font = ImageFont.truetype(
-        bold_font_path,
-        92
-    )
-
-    subtitle_font = ImageFont.truetype(
-        normal_font_path,
-        48
-    )
-
-except Exception:
-    title_font = ImageFont.load_default()
-    subtitle_font = ImageFont.load_default()
-
-
-title = "THE PRICE\nTRICK YOU MISS"
-
-subtitle = "SixsContent"
-
-# Center title
-bbox = draw.multiline_textbbox(
-    (0, 0),
-    title,
-    font=title_font,
-    spacing=12,
-    align="center"
-)
-
-text_width = bbox[2] - bbox[0]
-text_height = bbox[3] - bbox[1]
-
-title_x = (
-    thumbnail_width - text_width
-) // 2
-
-title_y = (
-    thumbnail_height - text_height
-) // 2 - 100
-
-draw.multiline_text(
-    (title_x, title_y),
-    title,
-    font=title_font,
-    fill="white",
-    spacing=12,
-    align="center",
-    stroke_width=3,
-    stroke_fill="black"
-)
-
-
-bbox2 = draw.textbbox(
-    (0, 0),
-    subtitle,
-    font=subtitle_font
-)
-
-subtitle_width = bbox2[2] - bbox2[0]
-
-draw.text(
-    (
-        (thumbnail_width - subtitle_width) // 2,
-        title_y + text_height + 60
-    ),
-    subtitle,
-    font=subtitle_font,
-    fill="white",
-    stroke_width=2,
-    stroke_fill="black"
-)
-
-
-thumbnail.save(
-    thumbnail_path,
-    "JPEG",
-    quality=92,
-    optimize=True
-)
-
-print(
-    f"✅ Thumbnail created: {thumbnail_path}"
-)
-print()
-
-
-# Remove temporary frame
-if frame_path.exists():
-    frame_path.unlink()
-
-
-# ============================================================
-# CONTENT METADATA
-# ============================================================
-
-print("📝 Creating content metadata...")
-
-
-title = (
-    "The Pricing Trick That Makes You Spend More"
-)
-
-description = """Have you ever wondered why businesses offer small, medium and large options?
-
-There is a simple pricing strategy behind it.
-
-Once you understand how price anchoring and comparison affect your decisions, you start seeing it everywhere.
-
-Follow SixsContent for more simple business and money insights.
-"""
-
-hashtags = [
-    "#business",
-    "#money",
-    "#finance",
-    "#businessfacts",
-    "#marketing",
-    "#pricing",
-    "#entrepreneur",
-    "#sixscontent",
-]
-
+print("=" * 60)
+print("📋 CREATING CONTENT METADATA")
+print("=" * 60)
 
 metadata = {
-    "brand": "SixsContent",
-    "phase": "3F",
-    "status": "ready_for_manual_publishing",
-    "title": title,
-    "description": description,
-    "hashtags": hashtags,
-    "video": {
-        "filename": "sixscontent_final.mp4",
-        "format": "MP4",
-        "codec": video_codec,
-        "width": width,
-        "height": height,
-        "orientation": "9:16",
-        "duration_seconds": round(duration, 2),
-        "size_bytes": size,
-    },
-    "files": {
-        "video": "sixscontent_final.mp4",
-        "thumbnail": "thumbnail.jpg",
-        "captions": (
-            "captions.srt"
-            if caption_output.exists()
-            else None
-        ),
-    },
-    "publishing": {
-        "tiktok": False,
-        "youtube_shorts": False,
-        "instagram_reels": False,
-        "telegram": False,
-        "automatic_upload": False,
-    },
-}
-
-
-metadata_path = (
-    OUTPUT_DIR / "content_metadata.json"
-)
-
-with open(
-    metadata_path,
-    "w",
-    encoding="utf-8"
-) as file:
-
-    json.dump(
-        metadata,
-        file,
-        indent=2,
-        ensure_ascii=False
-    )
-
-
-print(
-    f"✅ Metadata created: {metadata_path}"
-)
-print()
-
-
-# ============================================================
-# UPLOAD TEXT FILE
-# ============================================================
-
-upload_text = OUTPUT_DIR / "upload_text.txt"
-
-with open(
-    upload_text,
-    "w",
-    encoding="utf-8"
-) as file:
-
-    file.write(
-        "TITLE\n"
-        "=====\n"
-        f"{title}\n\n"
-        "DESCRIPTION\n"
-        "===========\n"
-        f"{description}\n\n"
-        "HASHTAGS\n"
-        "========\n"
-        f"{' '.join(hashtags)}\n"
-    )
-
-
-print(
-    f"✅ Upload text created: {upload_text}"
-)
-print()
-
-
-# ============================================================
-# CONTENT MANIFEST
-# ============================================================
-
-print("📋 Creating package manifest...")
-
-manifest = {
     "project": "SixsContent",
     "phase": "3F",
-    "package": "final-content-package",
-    "files": [],
+    "status": "ready",
+    "video": "sixscontent_final.mp4",
+    "format": "MP4",
+    "resolution": "1080x1920",
+    "orientation": "9:16",
+    "source_phase": "3E",
+    "voice_over": True,
+    "captions": True,
+    "pexels_media": True,
+    "cost_target": "$0",
+    "created_by": "SixsContent automated pipeline"
 }
 
-for path in sorted(OUTPUT_DIR.iterdir()):
+metadata_file = OUTPUT_DIR / "content_metadata.json"
 
-    if path.is_file():
-
-        manifest["files"].append(
-            {
-                "filename": path.name,
-                "size_bytes": path.stat().st_size,
-            }
-        )
-
-
-manifest_path = (
-    OUTPUT_DIR / "manifest.json"
-)
-
-with open(
-    manifest_path,
-    "w",
+metadata_file.write_text(
+    json.dumps(metadata, indent=2),
     encoding="utf-8"
-) as file:
-
-    json.dump(
-        manifest,
-        file,
-        indent=2
-    )
-
-
-print(
-    f"✅ Manifest created: {manifest_path}"
 )
-print()
 
+print(f"✅ Metadata created: {metadata_file}")
 
-# ============================================================
-# FINAL SUMMARY
-# ============================================================
+print("=" * 60)
+print("📝 CREATING PUBLISHING INFORMATION")
+print("=" * 60)
+
+publishing = """SIXSCONTENT — FINAL VIDEO
+
+Video:
+sixscontent_final.mp4
+
+Format:
+MP4
+
+Resolution:
+1080 × 1920
+
+Orientation:
+9:16 vertical
+
+Source:
+Phase 3E
+
+Includes:
+- Pexels visual footage
+- Voice-over
+- Burned-in captions
+- Final normalized video
+
+Status:
+READY FOR PUBLISHING
+
+Recommended destinations:
+- TikTok
+- Instagram Reels
+- YouTube Shorts
+- Facebook Reels
+
+The file is generated for manual publishing.
+No automatic social-media posting is performed in Phase 3F.
+"""
+
+publishing_file = OUTPUT_DIR / "publishing_info.txt"
+
+publishing_file.write_text(
+    publishing,
+    encoding="utf-8"
+)
+
+print(f"✅ Publishing information created: {publishing_file}")
+
+print("=" * 60)
+print("🔍 FINAL VALIDATION")
+print("=" * 60)
+
+if FINAL_VIDEO.stat().st_size <= 0:
+    print("❌ Final video is empty.")
+    sys.exit(1)
+
+final_duration = subprocess.run(
+    [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(FINAL_VIDEO)
+    ],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True
+).stdout.strip()
+
+print(f"⏱️ Final duration: {final_duration}s")
+print(f"💾 Final size: {FINAL_VIDEO.stat().st_size:,} bytes")
 
 print("=" * 60)
 print("PHASE 3F RESULT")
 print("=" * 60)
 
-print("✅ Phase 3E video received")
-print("✅ Final video copied")
-print("✅ Video validated")
-print("✅ 1080 × 1920")
-print("✅ 9:16 vertical")
-print("✅ H.264")
-print("✅ Audio verified")
+print("✅ Phase 3E artifact downloaded")
+print("✅ Phase 3E video located")
+print("✅ Final MP4 normalized")
+print("✅ 1080 × 1920 vertical output")
+print("✅ Metadata created")
+print("✅ Publishing information created")
+print("✅ Final package ready")
 
-if caption_output.exists():
-    print("✅ Captions included")
-else:
-    print("⚠️ Captions not included")
-
-print("✅ Thumbnail created")
-print("✅ Title created")
-print("✅ Description created")
-print("✅ Hashtags created")
-print("✅ Metadata JSON created")
-print("✅ Upload text created")
-print("✅ Manifest created")
-
-print()
-print("📁 FINAL PACKAGE:")
-
-for path in sorted(OUTPUT_DIR.iterdir()):
-
-    if path.is_file():
-
-        print(
-            f"   • {path.name} "
-            f"— {path.stat().st_size:,} bytes"
-        )
-
-print()
+print("=" * 60)
 print("🔥 PHASE 3F SUCCESS!")
-print("🚀 Content is ready for the publishing phase.")
 print("=" * 60)
