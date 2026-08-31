@@ -1,0 +1,41 @@
+name: SixsContent Phase 3D-1
+
+on:
+  workflow_dispatch:
+
+jobs:
+  phase3d1:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: |
+          pip install requests
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Run Phase 3D-1
+        env:
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+        run: |
+          python phase3d1_test.py
+
+      - name: Upload finished video
+        uses: actions/upload-artifact@v4
+        with:
+          name: sixscontent-phase3d1-video
+          path: |
+            sixscontent_phase3d1.mp4
+            phase3d1_videos/
