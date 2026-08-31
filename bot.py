@@ -1086,9 +1086,17 @@ def create_captions(
 
     for word in words:
 
-        current.append(
-            word
-        )
+    current.append(word)
 
-        if (
-         
+    if len(current) >= 4:
+
+        caption_text = " ".join(current)
+
+        captions.append({
+            "start": current_start,
+            "end": current_end,
+            "text": caption_text
+        })
+
+        current = []
+        current_start = word_end
