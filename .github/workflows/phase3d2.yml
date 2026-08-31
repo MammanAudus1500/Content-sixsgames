@@ -1,0 +1,37 @@
+name: SixsContent Phase 3D-2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  phase3d2:
+    name: Match Visuals and Build Video
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Run Phase 3D-2
+        env:
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+        run: |
+          python phase3d2_test.py
+
+      - name: Upload Phase 3D-2 video
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase3d2-video
+          path: phase3d2_output/
+          retention-days: 1
