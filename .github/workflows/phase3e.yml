@@ -1,0 +1,29 @@
+name: SixsContent Phase 3E
+
+on:
+  workflow_dispatch:
+
+jobs:
+  phase3e:
+    name: Voice Over + Captions
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Run Phase 3E
+        run: |
+          python phase3e_test.py
+
+      - name: Upload Phase 3E video
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase3e-final-video
+          path: phase3e_output/
+          retention-days: 7
