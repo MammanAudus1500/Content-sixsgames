@@ -5,7 +5,7 @@ from google import genai
 
 # ============================================================
 # SIXSCONTENT — PHASE 2
-# Telegram → GitHub Actions → Gemini → Telegram
+# ON-DEMAND TELEGRAM → GITHUB → GEMINI
 # ============================================================
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -13,40 +13,57 @@ GEMINI_KEY = os.environ["GEMINI_API_KEY"]
 
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# Current Gemini Flash model
-GEMINI_MODEL = "gemini-3.7-flash"
-
 client = genai.Client(api_key=GEMINI_KEY)
 
 
 # ============================================================
-# TELEGRAM FUNCTIONS
+# GEMINI MODEL FALLBACK SYSTEM
+# ============================================================
+
+MODELS = [
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.1-flash-lite"
+]
+
+
+# ============================================================
+# TELEGRAM
 # ============================================================
 
 def send_message(chat_id, text):
+
     url = f"{TELEGRAM_API}/sendMessage"
 
-    # Telegram has a message limit, so split very long responses.
-    max_length = 4000
+    # Telegram maximum message size is around 4096 characters.
+    max_length = 3900
 
     for i in range(0, len(text), max_length):
+
         part = text[i:i + max_length]
 
-        requests.post(
-            url,
-            json={
-                "chat_id": chat_id,
-                "text": part
-            },
-            timeout=30
-        )
+        try:
+            requests.post(
+                url,
+                json={
+                    "chat_id": chat_id,
+                    "text": part
+                },
+                timeout=30
+            )
+
+        except Exception as e:
+
+            print(f"Telegram send error: {e}")
 
 
-def get_updates(offset=None):
+def get_updates(offset=None, timeout=20):
+
     url = f"{TELEGRAM_API}/getUpdates"
 
     params = {
-        "timeout": 20
+        "timeout": timeout
     }
 
     if offset is not None:
@@ -55,7 +72,7 @@ def get_updates(offset=None):
     response = requests.get(
         url,
         params=params,
-        timeout=30
+        timeout=timeout + 10
     )
 
     response.raise_for_status()
@@ -64,52 +81,57 @@ def get_updates(offset=None):
 
 
 # ============================================================
-# CONTENT RULES
+# CONTENT CATEGORIES
 # ============================================================
 
 CATEGORY_RULES = {
 
     "body": """
-NICHE: HUMAN BODY / ANATOMY
+NICHE: HUMAN BODY AND ANATOMY
 
-Create fascinating short-form content about:
+Create fascinating content about:
 - Human anatomy
 - Strange things the body does
-- Amazing biological mechanisms
-- Unusual body facts
 - How organs work
-- Evolution and survival mechanisms
+- Biological mechanisms
+- Evolution
+- Survival mechanisms
+- Unexpected body facts
 
-Avoid medical diagnosis, treatment advice, or dangerous health claims.
+Avoid diagnosis, treatment advice, or dangerous medical claims.
 
-The content should make viewers think:
+The viewer should think:
+
 "Wait... my body actually does that?"
 """,
 
     "money": """
-NICHE: MONEY / BUSINESS / WEALTH
+NICHE: MONEY AND BUSINESS
 
-Create fascinating short-form content about:
+Create fascinating content about:
 - Money psychology
-- Business facts
+- Business
 - Wealth behavior
 - Consumer psychology
 - Interesting financial history
 - Business strategies
 - How companies make money
-- Economic concepts explained simply
+- Economic concepts
+- Interesting money facts
 
-Do NOT promise viewers that they will become rich.
+Do NOT promise viewers they will become rich.
+
 Do NOT give personalized financial advice.
+
 Do NOT promote scams, gambling, or get-rich-quick schemes.
 
-Make the content educational and curiosity-driven.
+Make it educational, surprising and curiosity-driven.
 """,
 
     "psychology": """
-NICHE: PSYCHOLOGY / HUMAN BEHAVIOR
+NICHE: PSYCHOLOGY AND HUMAN BEHAVIOR
 
-Create fascinating short-form content about:
+Create fascinating content about:
 - Human behavior
 - Cognitive biases
 - Social psychology
@@ -117,38 +139,43 @@ Create fascinating short-form content about:
 - Decision making
 - Habits
 - Communication
-- Interesting psychological experiments
+- Psychological experiments
 - Why people behave in surprising ways
 
-Do not diagnose viewers or claim that one behavior proves a mental disorder.
+Do not diagnose viewers.
 
-Focus on scientifically supported concepts.
+Do not claim normal behavior proves someone has a mental disorder.
+
+Focus on established psychological concepts.
 """,
 
     "world": """
-NICHE: WORLD / HISTORY / GEOGRAPHY / CULTURE
+NICHE: WORLD, HISTORY AND GEOGRAPHY
 
-Create fascinating short-form content about:
+Create fascinating content about:
 - Strange places
 - Hidden history
-- Interesting countries
-- Unusual traditions
-- Historical events
+- Countries
 - Geography
+- Historical events
 - Ancient civilizations
-- Surprising cultural facts
-- Weird but real places around the world
+- Unusual traditions
+- Interesting cultures
+- Weird but real places
 
-Avoid obvious fake facts and sensational misinformation.
+Avoid fake facts.
 
-The goal is:
-"I never knew that happened."
+Avoid invented historical events.
+
+The viewer should think:
+
+"I never knew that."
 """,
 
     "science": """
 NICHE: SCIENCE
 
-Create fascinating short-form content about:
+Create fascinating content about:
 - Space
 - Physics
 - Chemistry
@@ -159,10 +186,11 @@ Create fascinating short-form content about:
 - Scientific discoveries
 - Strange natural phenomena
 
-Explain difficult concepts in simple language.
+Explain difficult ideas in simple language.
 
-Prefer scientifically established information.
-Avoid presenting speculation as fact.
+Prefer established scientific information.
+
+Do not present speculation as proven fact.
 """
 }
 
@@ -171,44 +199,46 @@ Avoid presenting speculation as fact.
 # GEMINI PROMPT
 # ============================================================
 
-def create_content(category):
+def build_prompt(category):
 
-    rules = CATEGORY_RULES[category]
-
-    prompt = f"""
+    return f"""
 You are the lead short-form content writer for SIXSCONTENT.
 
-Your job is to create ONE highly engaging short-form video idea.
+Your job is to create ONE highly engaging short-form video.
 
-{rules}
+CATEGORY RULES:
 
-IMPORTANT STYLE:
+{CATEGORY_RULES[category]}
+
+STYLE:
 
 - The first sentence must immediately create curiosity.
-- No boring introductions such as "Today we are going to..."
-- The hook should work within the first 3 seconds.
-- Make the viewer want to stay until the end.
-- Use simple conversational English.
-- Make it sound natural when spoken by a narrator.
-- Do not write like a school textbook.
-- Do not use fake statistics.
-- Do not invent scientific studies.
-- Do not exaggerate facts beyond what the evidence supports.
-- Avoid repeating common viral facts unless you add a genuinely interesting angle.
-- Make the story suitable for TikTok, YouTube Shorts and Instagram Reels.
+- The hook must work within approximately 3 seconds.
+- No boring introduction.
+- Do not say "Today we are going to..."
+- Use natural conversational English.
+- Make it sound like a real human narrator.
+- Do not sound like a school textbook.
+- Focus on ONE central idea.
+- Do not combine unrelated facts.
+- Make the viewer want to watch until the end.
+- Suitable for TikTok, YouTube Shorts and Instagram Reels.
 - Target approximately 45–70 seconds of narration.
-- Keep the script easy to turn into AI-generated visuals.
+- Make the script easy to turn into video scenes.
+- Do not invent statistics.
+- Do not invent studies.
+- Do not invent quotations.
+- Do not invent historical events.
+- Do not make unsupported scientific claims.
+- Avoid overused generic viral facts when possible.
+- Give the topic a fresh angle.
 
-VERY IMPORTANT:
-The script should contain ONE central idea.
-Do not combine several unrelated facts.
-
-OUTPUT EXACTLY IN THIS FORMAT:
+OUTPUT EXACTLY LIKE THIS:
 
 🔥 SIXSCONTENT RESULT
 
 CATEGORY:
-[category]
+{category}
 
 TITLE:
 [short curiosity-driven title]
@@ -217,41 +247,113 @@ HOOK:
 [powerful 1–2 sentence hook]
 
 SCRIPT:
-[45–70 second narration]
+[45–70 second voice-over script]
 
 VISUALS:
-1. [scene 1]
-2. [scene 2]
-3. [scene 3]
-4. [scene 4]
-5. [scene 5]
-6. [scene 6]
+1. [visual scene]
+2. [visual scene]
+3. [visual scene]
+4. [visual scene]
+5. [visual scene]
+6. [visual scene]
 
 CAPTION:
-[short social-media caption]
+[short social media caption]
 
 HASHTAGS:
 [8–12 relevant hashtags]
 
 DURATION:
-[recommended duration]
+[recommended video duration]
 
 THUMBNAIL IDEA:
-[strong visual thumbnail concept]
+[strong thumbnail concept]
 
-FINAL QUALITY RULE:
-Before answering, silently check that the information is plausible and that you have not invented facts, studies, statistics, quotations, or historical events.
-
-Category requested:
-{category}
+FINAL CHECK:
+Before answering, silently check that the information is plausible and that you have not invented facts or evidence.
 """
 
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt
-    )
 
-    return response.text
+# ============================================================
+# GEMINI REQUEST WITH RETRIES + FALLBACK MODELS
+# ============================================================
+
+def generate_content(category):
+
+    prompt = build_prompt(category)
+
+    last_error = None
+
+    for model in MODELS:
+
+        print(f"Trying Gemini model: {model}")
+
+        # Try each model up to 2 times.
+        for attempt in range(1, 3):
+
+            try:
+
+                print(
+                    f"Attempt {attempt}/2 using {model}"
+                )
+
+                response = client.models.generate_content(
+                    model=model,
+                    contents=prompt
+                )
+
+                if response and response.text:
+
+                    print(
+                        f"SUCCESS using {model}"
+                    )
+
+                    return response.text
+
+                last_error = "Gemini returned an empty response."
+
+            except Exception as e:
+
+                last_error = str(e)
+
+                print(
+                    f"Gemini error using {model}: {e}"
+                )
+
+                error_text = str(e)
+
+                # Retry temporary/server errors.
+                temporary_error = (
+                    "503" in error_text
+                    or "UNAVAILABLE" in error_text
+                    or "429" in error_text
+                    or "500" in error_text
+                    or "502" in error_text
+                    or "504" in error_text
+                    or "high demand" in error_text
+                )
+
+                if temporary_error and attempt < 2:
+
+                    delay = 5 * (2 ** (attempt - 1))
+
+                    print(
+                        f"Temporary Gemini problem."
+                        f" Waiting {delay} seconds..."
+                    )
+
+                    time.sleep(delay)
+
+                    continue
+
+                # If model doesn't exist or is unavailable,
+                # move immediately to the next model.
+                break
+
+    raise RuntimeError(
+        "All Gemini models failed.\n\n"
+        f"Last error:\n{last_error}"
+    )
 
 
 # ============================================================
@@ -262,9 +364,15 @@ def handle_message(chat_id, text):
 
     text = text.strip()
 
+    # --------------------------------------------------------
+    # START
+    # --------------------------------------------------------
+
     if text == "/start":
 
-        message = """
+        send_message(
+            chat_id,
+            """
 🔥 Welcome to SixsContent!
 
 Your automated content machine is ready.
@@ -283,7 +391,8 @@ Example:
 
 /create body
 
-The system will generate:
+The system generates:
+
 • Title
 • Hook
 • Script
@@ -293,12 +402,16 @@ The system will generate:
 • Duration
 • Thumbnail idea
 
-⚡ Start whenever you need content.
+⚡ Send /create when you're ready.
 """
+        )
 
-        send_message(chat_id, message)
-        return
+        return False
 
+
+    # --------------------------------------------------------
+    # HELP
+    # --------------------------------------------------------
 
     if text == "/help":
 
@@ -315,13 +428,15 @@ The system will generate:
 
 /start
 /help
-
-Use one /create command at a time.
 """
         )
 
-        return
+        return False
 
+
+    # --------------------------------------------------------
+    # CREATE
+    # --------------------------------------------------------
 
     if text.startswith("/create"):
 
@@ -334,7 +449,7 @@ Use one /create command at a time.
                 """
 ❌ Invalid command.
 
-Use one of:
+Use:
 
 /create body
 /create money
@@ -344,7 +459,7 @@ Use one of:
 """
             )
 
-            return
+            return False
 
 
         category = parts[1].lower()
@@ -356,7 +471,7 @@ Use one of:
                 """
 ❌ Unknown category.
 
-Available categories:
+Available:
 
 /create body
 /create money
@@ -366,21 +481,27 @@ Available categories:
 """
             )
 
-            return
+            return False
 
 
-        category_names = {
+        names = {
+
             "body": "🧠 HUMAN BODY",
+
             "money": "💰 MONEY & BUSINESS",
+
             "psychology": "🧠 PSYCHOLOGY",
+
             "world": "🌍 WORLD",
+
             "science": "🔬 SCIENCE"
         }
+
 
         send_message(
             chat_id,
             f"""
-🔥 Creating your {category_names[category]} video...
+🔥 Creating your {names[category]} video...
 
 Gemini is preparing:
 
@@ -400,38 +521,52 @@ Please wait...
 
         try:
 
-            result = create_content(category)
+            result = generate_content(category)
 
-            final_message = f"""
-🔥 SIXSCONTENT RESULT
-
+            send_message(
+                chat_id,
+                f"""
 {result}
 
-✅ Content created successfully.
+✅ CONTENT CREATED SUCCESSFULLY
 
-GitHub will now shut down this session.
+GitHub will now shut down automatically.
 
-When you want another piece of content,
-start the GitHub Action again.
+When you need another piece of content:
+
+1. Start the GitHub Action again.
+2. Send your /create command.
 """
+            )
 
-            send_message(chat_id, final_message)
+            # IMPORTANT:
+            # Return True so the GitHub program exits.
+            return True
+
 
         except Exception as e:
 
-            error_message = f"""
-❌ Gemini failed to create the content.
+            send_message(
+                chat_id,
+                f"""
+❌ Gemini could not create the content.
+
+The system tried multiple Gemini models and retries.
 
 Error:
 {str(e)}
 
-The GitHub session will now stop.
+GitHub will now shut down automatically.
 """
+            )
 
-            send_message(chat_id, error_message)
+            # Also stop GitHub after failure.
+            return True
 
-        return
 
+    # --------------------------------------------------------
+    # UNKNOWN COMMAND
+    # --------------------------------------------------------
 
     send_message(
         chat_id,
@@ -448,77 +583,159 @@ Use:
 """
     )
 
+    return False
+
 
 # ============================================================
-# MAIN LOOP
+# MAIN
 # ============================================================
 
 def main():
 
-    print("🔥 SixsContent Phase 2 started")
+    print("🔥 SIXSCONTENT PHASE 2 STARTED")
+
+    print("Waiting for Telegram command...")
+
+    # --------------------------------------------------------
+    # CLEAR OLD TELEGRAM UPDATES
+    # --------------------------------------------------------
 
     offset = None
 
-    # Tell Telegram to ignore old messages.
     try:
 
-        data = get_updates()
+        old_updates = get_updates(
+            timeout=1
+        )
 
-        if data.get("ok") and data.get("result"):
+        if old_updates.get("ok"):
 
-            offset = data["result"][-1]["update_id"] + 1
+            results = old_updates.get(
+                "result",
+                []
+            )
 
-    except Exception:
+            if results:
 
-        pass
+                offset = (
+                    results[-1]["update_id"] + 1
+                )
+
+                print(
+                    "Old Telegram messages cleared."
+                )
+
+    except Exception as e:
+
+        print(
+            f"Could not clear old messages: {e}"
+        )
 
 
-    # GitHub Actions stays alive ONLY while this workflow is running.
-    # When the workflow is cancelled, GitHub stops it.
+    # --------------------------------------------------------
+    # WAIT FOR ONE NEW COMMAND
+    # --------------------------------------------------------
 
     while True:
 
         try:
 
-            data = get_updates(offset)
+            data = get_updates(
+                offset=offset,
+                timeout=20
+            )
 
             if not data.get("ok"):
+
                 time.sleep(2)
+
                 continue
 
 
-            for update in data.get("result", []):
+            updates = data.get(
+                "result",
+                []
+            )
 
-                offset = update["update_id"] + 1
 
-                message = update.get("message")
+            for update in updates:
+
+                offset = (
+                    update["update_id"] + 1
+                )
+
+                message = update.get(
+                    "message"
+                )
 
                 if not message:
+
                     continue
+
 
                 chat_id = message["chat"]["id"]
 
-                text = message.get("text", "")
+                text = message.get(
+                    "text",
+                    ""
+                )
+
 
                 if not text:
+
                     continue
 
-                print(f"Telegram message: {text}")
 
-                handle_message(chat_id, text)
+                print(
+                    f"Telegram command: {text}"
+                )
+
+
+                should_stop = handle_message(
+                    chat_id,
+                    text
+                )
+
+
+                # ------------------------------------------------
+                # AUTOMATICALLY STOP AFTER /create
+                # ------------------------------------------------
+
+                if should_stop:
+
+                    print(
+                        "🔥 Content request finished."
+                    )
+
+                    print(
+                        "🛑 Stopping GitHub session."
+                    )
+
+                    return
 
 
         except requests.exceptions.RequestException as e:
 
-            print(f"Telegram connection error: {e}")
+            print(
+                f"Telegram connection error: {e}"
+            )
+
             time.sleep(5)
 
 
         except Exception as e:
 
-            print(f"Unexpected error: {e}")
+            print(
+                f"Unexpected error: {e}"
+            )
+
             time.sleep(5)
 
 
+# ============================================================
+# START
+# ============================================================
+
 if __name__ == "__main__":
+
     main()
