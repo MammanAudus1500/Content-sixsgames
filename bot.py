@@ -1,23 +1,62 @@
 import os
+import re
+import sys
 import time
+import json
+import math
+import shutil
+import asyncio
+import subprocess
+from pathlib import Path
+
 import requests
 from google import genai
 
+
 # ============================================================
-# SIXSCONTENT — PHASE 2
-# ON-DEMAND TELEGRAM → GITHUB → GEMINI
+# SIXSCONTENT — UNIFIED VIDEO BOT
+#
+# Telegram
+#   ↓
+# Gemini
+#   ↓
+# Pexels
+#   ↓
+# Edge TTS
+#   ↓
+# Captions
+#   ↓
+# FFmpeg
+#   ↓
+# Telegram
+# ============================================================
+
+
+print("=" * 70)
+print("🔥 SIXSCONTENT — UNIFIED VIDEO ENGINE")
+print("=" * 70)
+
+
+# ============================================================
+# ENVIRONMENT
 # ============================================================
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 GEMINI_KEY = os.environ["GEMINI_API_KEY"]
+PEXELS_API_KEY = os.environ["PEXELS_API_KEY"]
 
-TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+TELEGRAM_API = (
+    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+)
 
-client = genai.Client(api_key=GEMINI_KEY)
+client = genai.Client(
+    api_key=GEMINI_KEY
+)
 
 
 # ============================================================
-# GEMINI MODEL FALLBACK SYSTEM
+# MODELS
 # ============================================================
 
 MODELS = [
@@ -29,59 +68,41 @@ MODELS = [
 
 
 # ============================================================
-# TELEGRAM
+# DIRECTORIES
 # ============================================================
 
-def send_message(chat_id, text):
+WORK_DIR = Path("sixscontent_work")
+DOWNLOAD_DIR = WORK_DIR / "downloads"
+CLIPS_DIR = WORK_DIR / "clips"
 
-    url = f"{TELEGRAM_API}/sendMessage"
+FINAL_VIDEO = (
+    WORK_DIR /
+    "sixscontent_final.mp4"
+)
 
-    # Telegram maximum message size is around 4096 characters.
-    max_length = 3900
+SCRIPT_FILE = (
+    WORK_DIR /
+    "script.txt"
+)
 
-    for i in range(0, len(text), max_length):
+VOICE_FILE = (
+    WORK_DIR /
+    "voiceover.mp3"
+)
 
-        part = text[i:i + max_length]
+CAPTIONS_FILE = (
+    WORK_DIR /
+    "captions.srt"
+)
 
-        try:
-            requests.post(
-                url,
-                json={
-                    "chat_id": chat_id,
-                    "text": part
-                },
-                timeout=30
-            )
-
-        except Exception as e:
-
-            print(f"Telegram send error: {e}")
-
-
-def get_updates(offset=None, timeout=20):
-
-    url = f"{TELEGRAM_API}/getUpdates"
-
-    params = {
-        "timeout": timeout
-    }
-
-    if offset is not None:
-        params["offset"] = offset
-
-    response = requests.get(
-        url,
-        params=params,
-        timeout=timeout + 10
-    )
-
-    response.raise_for_status()
-
-    return response.json()
+METADATA_FILE = (
+    WORK_DIR /
+    "content_metadata.json"
+)
 
 
 # ============================================================
-# CONTENT CATEGORIES
+# CATEGORY RULES
 # ============================================================
 
 CATEGORY_RULES = {
@@ -99,10 +120,6 @@ Create fascinating content about:
 - Unexpected body facts
 
 Avoid diagnosis, treatment advice, or dangerous medical claims.
-
-The viewer should think:
-
-"Wait... my body actually does that?"
 """,
 
     "money": """
@@ -111,21 +128,15 @@ NICHE: MONEY AND BUSINESS
 Create fascinating content about:
 - Money psychology
 - Business
-- Wealth behavior
 - Consumer psychology
 - Interesting financial history
 - Business strategies
 - How companies make money
 - Economic concepts
-- Interesting money facts
 
-Do NOT promise viewers they will become rich.
-
-Do NOT give personalized financial advice.
-
-Do NOT promote scams, gambling, or get-rich-quick schemes.
-
-Make it educational, surprising and curiosity-driven.
+Do not promise viewers they will become rich.
+Do not give personalized financial advice.
+Do not promote scams, gambling, or get-rich-quick schemes.
 """,
 
     "psychology": """
@@ -140,12 +151,8 @@ Create fascinating content about:
 - Habits
 - Communication
 - Psychological experiments
-- Why people behave in surprising ways
 
 Do not diagnose viewers.
-
-Do not claim normal behavior proves someone has a mental disorder.
-
 Focus on established psychological concepts.
 """,
 
@@ -164,12 +171,7 @@ Create fascinating content about:
 - Weird but real places
 
 Avoid fake facts.
-
 Avoid invented historical events.
-
-The viewer should think:
-
-"I never knew that."
 """,
 
     "science": """
@@ -186,556 +188,907 @@ Create fascinating content about:
 - Scientific discoveries
 - Strange natural phenomena
 
-Explain difficult ideas in simple language.
-
-Prefer established scientific information.
-
+Explain difficult ideas simply.
 Do not present speculation as proven fact.
 """
 }
 
 
 # ============================================================
-# GEMINI PROMPT
+# TELEGRAM
+# ============================================================
+
+def telegram_request(
+    method,
+    data=None,
+    files=None,
+    timeout=120
+):
+
+    url = f"{TELEGRAM_API}/{method}"
+
+    response = requests.post(
+        url,
+        data=data,
+        files=files,
+        timeout=timeout
+    )
+
+    return response
+
+
+def send_message(chat_id, text):
+
+    max_length = 3900
+
+    for i in range(
+        0,
+        len(text),
+        max_length
+    ):
+
+        part = text[
+            i:i + max_length
+        ]
+
+        try:
+
+            response = requests.post(
+                f"{TELEGRAM_API}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": part
+                },
+                timeout=60
+            )
+
+            if response.status_code != 200:
+
+                print(
+                    "Telegram message error:",
+                    response.text
+                )
+
+        except Exception as e:
+
+            print(
+                f"Telegram send error: {e}"
+            )
+
+
+def send_video(video):
+
+    print("=" * 70)
+    print("📲 SENDING FINAL VIDEO TO TELEGRAM")
+    print("=" * 70)
+
+    size_mb = (
+        video.stat().st_size /
+        1024 /
+        1024
+    )
+
+    print(
+        f"📦 Video size: {size_mb:.2f} MB"
+    )
+
+    if size_mb > 49:
+
+        raise RuntimeError(
+            "Final video is larger than 49 MB."
+        )
+
+    send_message(
+        TELEGRAM_CHAT_ID,
+        """
+🔥 SIXSCONTENT VIDEO READY
+
+The complete video pipeline has finished.
+
+🎬 Uploading the final MP4 now...
+"""
+    )
+
+    caption = """
+🔥 SIXSCONTENT — FINAL VIDEO
+
+✅ Gemini content
+✅ Pexels visuals
+✅ Voice-over
+✅ Synchronized captions
+✅ 1080×1920 vertical
+✅ Final editing complete
+
+Ready for:
+TikTok
+Instagram Reels
+YouTube Shorts
+Facebook Reels
+"""
+
+    try:
+
+        with open(
+            video,
+            "rb"
+        ) as video_file:
+
+            response = telegram_request(
+                "sendVideo",
+                data={
+                    "chat_id": TELEGRAM_CHAT_ID,
+                    "caption": caption,
+                    "supports_streaming": "true"
+                },
+                files={
+                    "video": (
+                        video.name,
+                        video_file,
+                        "video/mp4"
+                    )
+                },
+                timeout=300
+            )
+
+    except Exception as e:
+
+        raise RuntimeError(
+            f"Telegram upload exception: {e}"
+        )
+
+    if response.status_code != 200:
+
+        raise RuntimeError(
+            "Telegram video upload failed.\n"
+            f"HTTP {response.status_code}\n"
+            f"{response.text}"
+        )
+
+    result = response.json()
+
+    if not result.get("ok"):
+
+        raise RuntimeError(
+            f"Telegram rejected video:\n{result}"
+        )
+
+    print(
+        "✅ VIDEO SUCCESSFULLY DELIVERED TO TELEGRAM"
+    )
+
+
+# ============================================================
+# FFMPEG
+# ============================================================
+
+def run_command(command):
+
+    print(
+        "▶️",
+        " ".join(
+            str(x)
+            for x in command
+        )
+    )
+
+    result = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True
+    )
+
+    print(
+        result.stdout
+    )
+
+    if result.returncode != 0:
+
+        raise RuntimeError(
+            "Command failed."
+        )
+
+
+def check_ffmpeg():
+
+    if shutil.which("ffmpeg") is None:
+
+        raise RuntimeError(
+            "FFmpeg is not installed."
+        )
+
+    if shutil.which("ffprobe") is None:
+
+        raise RuntimeError(
+            "FFprobe is not installed."
+        )
+
+    print(
+        "✅ FFmpeg available."
+    )
+
+    print(
+        "✅ FFprobe available."
+    )
+
+
+def get_duration(file):
+
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(file)
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+
+    try:
+
+        return float(
+            result.stdout.strip()
+        )
+
+    except Exception:
+
+        return 0.0
+
+
+# ============================================================
+# GEMINI
 # ============================================================
 
 def build_prompt(category):
 
     return f"""
-You are the lead short-form content writer for SIXSCONTENT.
+You are the lead short-form video creator for SIXSCONTENT.
 
-Your job is to create ONE highly engaging short-form video.
+Your job is NOT to write a school-style article.
 
-CATEGORY RULES:
+Your job is to create a short-form video that makes people
+stop scrolling immediately and keeps them watching.
+
+CATEGORY:
 
 {CATEGORY_RULES[category]}
 
-STYLE:
+RETENTION RULES:
 
-- The first sentence must immediately create curiosity.
-- The hook must work within approximately 3 seconds.
-- No boring introduction.
-- Do not say "Today we are going to..."
-- Use natural conversational English.
-- Make it sound like a real human narrator.
-- Do not sound like a school textbook.
-- Focus on ONE central idea.
-- Do not combine unrelated facts.
-- Make the viewer want to watch until the end.
-- Suitable for TikTok, YouTube Shorts and Instagram Reels.
-- Target approximately 45–70 seconds of narration.
-- Make the script easy to turn into video scenes.
-- Do not invent statistics.
-- Do not invent studies.
-- Do not invent quotations.
-- Do not invent historical events.
-- Do not make unsupported scientific claims.
-- Avoid overused generic viral facts when possible.
-- Give the topic a fresh angle.
+1. The first sentence must create curiosity immediately.
+2. The first 1–2 seconds must feel impossible to ignore.
+3. Never start with:
+   "Today we are going to..."
+   "Did you know..."
+   "In this video..."
+4. Do not waste time introducing the topic.
+5. Use short conversational sentences.
+6. Keep the narration energetic.
+7. Avoid long explanations.
+8. Create a curiosity gap.
+9. Give information in stages.
+10. Add a surprising development before the ending.
+11. The ending must pay off the opening.
+12. The viewer should constantly feel:
+    "Wait, what?"
+    or
+    "I need to know what happens next."
+13. Target approximately 35–55 seconds.
+14. Do NOT force the script to reach 60 seconds.
+15. Use approximately 115–145 spoken words per minute.
+16. Write for a fast narrator.
+17. Avoid unnecessary filler.
+18. Every sentence must earn its place.
 
-OUTPUT EXACTLY LIKE THIS:
+VISUAL RULES:
 
-🔥 SIXSCONTENT RESULT
+Each visual must directly represent what the narrator is saying.
 
-CATEGORY:
-{category}
+Do NOT give generic visuals such as:
+"person walking"
+"person thinking"
+"businessman working"
 
-TITLE:
-[short curiosity-driven title]
+unless they genuinely represent the narration.
 
-HOOK:
-[powerful 1–2 sentence hook]
+Visuals should change frequently.
 
-SCRIPT:
-[45–70 second voice-over script]
+Create 8–12 scenes.
 
-VISUALS:
-1. [visual scene]
-2. [visual scene]
-3. [visual scene]
-4. [visual scene]
-5. [visual scene]
-6. [visual scene]
+Each scene must contain:
+- exact narration covered by the scene
+- a highly specific Pexels search query
 
-CAPTION:
-[short social media caption]
+The visual query should describe something that could realistically
+exist as stock footage.
 
-HASHTAGS:
-[8–12 relevant hashtags]
+VOICE:
 
-DURATION:
-[recommended video duration]
+Write natural spoken English.
 
-THUMBNAIL IDEA:
-[strong thumbnail concept]
+Use punctuation for natural emphasis.
 
-FINAL CHECK:
-Before answering, silently check that the information is plausible and that you have not invented facts or evidence.
+Avoid giant paragraphs.
+
+OUTPUT VALID JSON ONLY.
+
+Use this exact structure:
+
+{{
+  "category": "{category}",
+  "title": "short curiosity-driven title",
+  "hook": "opening hook",
+  "script": "complete narration",
+  "scenes": [
+    {{
+      "narration": "sentence or short section",
+      "visual": "specific stock footage search query"
+    }}
+  ],
+  "caption": "short social caption",
+  "hashtags": ["#one", "#two", "#three"]
+}}
+
+Do not include markdown fences.
+Do not include explanations outside the JSON.
 """
 
 
-# ============================================================
-# GEMINI REQUEST WITH RETRIES + FALLBACK MODELS
-# ============================================================
+def extract_json(text):
+
+    text = text.strip()
+
+    if text.startswith("```"):
+
+        text = re.sub(
+            r"^```(?:json)?",
+            "",
+            text,
+            flags=re.IGNORECASE
+        )
+
+        text = re.sub(
+            r"```$",
+            "",
+            text
+        )
+
+    start = text.find("{")
+    end = text.rfind("}")
+
+    if start == -1 or end == -1:
+
+        raise ValueError(
+            "Gemini did not return JSON."
+        )
+
+    return json.loads(
+        text[start:end + 1]
+    )
+
 
 def generate_content(category):
 
-    prompt = build_prompt(category)
+    prompt = build_prompt(
+        category
+    )
 
     last_error = None
 
     for model in MODELS:
 
-        print(f"Trying Gemini model: {model}")
+        print(
+            f"🤖 Trying Gemini model: {model}"
+        )
 
-        # Try each model up to 2 times.
         for attempt in range(1, 3):
 
             try:
 
-                print(
-                    f"Attempt {attempt}/2 using {model}"
+                response = (
+                    client.models.generate_content(
+                        model=model,
+                        contents=prompt
+                    )
                 )
 
-                response = client.models.generate_content(
-                    model=model,
-                    contents=prompt
-                )
+                if not response:
 
-                if response and response.text:
-
-                    print(
-                        f"SUCCESS using {model}"
+                    raise RuntimeError(
+                        "Empty Gemini response."
                     )
 
-                    return response.text
+                text = (
+                    response.text
+                    or ""
+                ).strip()
 
-                last_error = "Gemini returned an empty response."
+                if not text:
+
+                    raise RuntimeError(
+                        "Gemini returned empty text."
+                    )
+
+                content = extract_json(
+                    text
+                )
+
+                if not content.get(
+                    "script"
+                ):
+
+                    raise RuntimeError(
+                        "Gemini response has no script."
+                    )
+
+                scenes = content.get(
+                    "scenes",
+                    []
+                )
+
+                if len(scenes) < 4:
+
+                    raise RuntimeError(
+                        "Gemini returned too few scenes."
+                    )
+
+                print(
+                    f"✅ Gemini succeeded with {model}"
+                )
+
+                return content
 
             except Exception as e:
 
                 last_error = str(e)
 
                 print(
-                    f"Gemini error using {model}: {e}"
+                    f"⚠️ Gemini error: {e}"
                 )
 
-                error_text = str(e)
-
-                # Retry temporary/server errors.
-                temporary_error = (
-                    "503" in error_text
-                    or "UNAVAILABLE" in error_text
-                    or "429" in error_text
-                    or "500" in error_text
-                    or "502" in error_text
-                    or "504" in error_text
-                    or "high demand" in error_text
+                temporary = (
+                    "429" in str(e)
+                    or "500" in str(e)
+                    or "502" in str(e)
+                    or "503" in str(e)
+                    or "504" in str(e)
+                    or "UNAVAILABLE" in str(e)
+                    or "high demand" in str(e)
                 )
 
-                if temporary_error and attempt < 2:
+                if temporary and attempt < 2:
 
-                    delay = 5 * (2 ** (attempt - 1))
+                    delay = 5 * attempt
 
                     print(
-                        f"Temporary Gemini problem."
-                        f" Waiting {delay} seconds..."
+                        f"Waiting {delay}s..."
                     )
 
-                    time.sleep(delay)
+                    time.sleep(
+                        delay
+                    )
 
-                    continue
+                else:
 
-                # If model doesn't exist or is unavailable,
-                # move immediately to the next model.
-                break
+                    break
 
     raise RuntimeError(
-        "All Gemini models failed.\n\n"
-        f"Last error:\n{last_error}"
+        "All Gemini models failed.\n"
+        f"Last error: {last_error}"
     )
 
 
 # ============================================================
-# COMMAND HANDLER
+# PEXELS
 # ============================================================
 
-def handle_message(chat_id, text):
+def search_pexels(
+    query,
+    per_page=10
+):
 
-    text = text.strip()
+    print(
+        f"🔎 Pexels: {query}"
+    )
 
-    # --------------------------------------------------------
-    # START
-    # --------------------------------------------------------
+    response = requests.get(
+        "https://api.pexels.com/v1/videos/search",
+        headers={
+            "Authorization":
+            PEXELS_API_KEY
+        },
+        params={
+            "query": query,
+            "orientation": "portrait",
+            "per_page": per_page
+        },
+        timeout=30
+    )
 
-    if text == "/start":
+    response.raise_for_status()
 
-        send_message(
-            chat_id,
-            """
-🔥 Welcome to SixsContent!
+    return response.json().get(
+        "videos",
+        []
+    )
 
-Your automated content machine is ready.
 
-PHASE 2 is active.
+def choose_pexels_video(videos):
 
-Create content with:
+    if not videos:
 
-/create body
-/create money
-/create psychology
-/create world
-/create science
+        return None
 
-Example:
+    # Prefer portrait footage.
+    portrait = []
 
-/create body
+    for video in videos:
 
-The system generates:
-
-• Title
-• Hook
-• Script
-• Visual directions
-• Caption
-• Hashtags
-• Duration
-• Thumbnail idea
-
-⚡ Send /create when you're ready.
-"""
+        width = video.get(
+            "width",
+            0
         )
 
-        return False
-
-
-    # --------------------------------------------------------
-    # HELP
-    # --------------------------------------------------------
-
-    if text == "/help":
-
-        send_message(
-            chat_id,
-            """
-🔥 SIXSCONTENT COMMANDS
-
-/create body
-/create money
-/create psychology
-/create world
-/create science
-
-/start
-/help
-"""
+        height = video.get(
+            "height",
+            0
         )
 
-        return False
+        if height > width:
 
-
-    # --------------------------------------------------------
-    # CREATE
-    # --------------------------------------------------------
-
-    if text.startswith("/create"):
-
-        parts = text.split()
-
-        if len(parts) != 2:
-
-            send_message(
-                chat_id,
-                """
-❌ Invalid command.
-
-Use:
-
-/create body
-/create money
-/create psychology
-/create world
-/create science
-"""
+            portrait.append(
+                video
             )
 
-            return False
+    candidates = (
+        portrait
+        if portrait
+        else videos
+    )
+
+    # Prefer reasonably large files.
+    candidates.sort(
+        key=lambda video: (
+            video.get("height", 0),
+            video.get("width", 0)
+        ),
+        reverse=True
+    )
+
+    return candidates[0]
 
 
-        category = parts[1].lower()
+def choose_download_link(video):
 
-        if category not in CATEGORY_RULES:
+    files = video.get(
+        "video_files",
+        []
+    )
 
-            send_message(
-                chat_id,
-                """
-❌ Unknown category.
+    if not files:
 
-Available:
+        return None
 
-/create body
-/create money
-/create psychology
-/create world
-/create science
-"""
-            )
+    mp4 = [
+        f for f in files
+        if f.get("file_type")
+        == "video/mp4"
+    ]
 
-            return False
+    if not mp4:
+
+        mp4 = files
+
+    portrait = [
+        f for f in mp4
+        if f.get("height", 0)
+        >= f.get("width", 0)
+    ]
+
+    candidates = (
+        portrait
+        if portrait
+        else mp4
+    )
+
+    candidates.sort(
+        key=lambda f: (
+            f.get("width", 0) *
+            f.get("height", 0)
+        ),
+        reverse=True
+    )
+
+    return candidates[0].get(
+        "link"
+    )
 
 
-        names = {
+def download_file(
+    url,
+    output
+):
 
-            "body": "🧠 HUMAN BODY",
+    print(
+        f"⬇️ Downloading {output.name}"
+    )
 
-            "money": "💰 MONEY & BUSINESS",
+    with requests.get(
+        url,
+        stream=True,
+        timeout=120
+    ) as response:
 
-            "psychology": "🧠 PSYCHOLOGY",
+        response.raise_for_status()
 
-            "world": "🌍 WORLD",
+        with open(
+            output,
+            "wb"
+        ) as file:
 
-            "science": "🔬 SCIENCE"
-        }
+            for chunk in response.iter_content(
+                chunk_size=1024 * 1024
+            ):
+
+                if chunk:
+
+                    file.write(
+                        chunk
+                    )
 
 
-        send_message(
-            chat_id,
-            f"""
-🔥 Creating your {names[category]} video...
+# ============================================================
+# VISUAL BUILDING
+# ============================================================
 
-Gemini is preparing:
+def clean_work_directory():
 
-• Viral title
-• Strong hook
-• Voice-over script
-• Scene-by-scene visuals
-• Caption
-• Hashtags
-• Duration
-• Thumbnail idea
+    if WORK_DIR.exists():
 
-Please wait...
-"""
+        shutil.rmtree(
+            WORK_DIR
         )
 
+    DOWNLOAD_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    CLIPS_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+
+def build_visuals(content):
+
+    scenes = content[
+        "scenes"
+    ]
+
+    if len(scenes) > 10:
+
+        scenes = scenes[:10]
+
+    print("=" * 70)
+    print("🎬 BUILDING VISUAL STORY")
+    print("=" * 70)
+
+    raw_files = []
+
+    for index, scene in enumerate(
+        scenes,
+        start=1
+    ):
+
+        query = scene.get(
+            "visual",
+            ""
+        ).strip()
+
+        if not query:
+
+            continue
 
         try:
 
-            result = generate_content(category)
-
-            send_message(
-                chat_id,
-                f"""
-{result}
-
-✅ CONTENT CREATED SUCCESSFULLY
-
-GitHub will now shut down automatically.
-
-When you need another piece of content:
-
-1. Start the GitHub Action again.
-2. Send your /create command.
-"""
+            videos = search_pexels(
+                query
             )
 
-            # IMPORTANT:
-            # Return True so the GitHub program exits.
-            return True
-
-
-        except Exception as e:
-
-            send_message(
-                chat_id,
-                f"""
-❌ Gemini could not create the content.
-
-The system tried multiple Gemini models and retries.
-
-Error:
-{str(e)}
-
-GitHub will now shut down automatically.
-"""
-            )
-
-            # Also stop GitHub after failure.
-            return True
-
-
-    # --------------------------------------------------------
-    # UNKNOWN COMMAND
-    # --------------------------------------------------------
-
-    send_message(
-        chat_id,
-        """
-❌ I don't understand that command.
-
-Use:
-
-/create body
-/create money
-/create psychology
-/create world
-/create science
-"""
-    )
-
-    return False
-
-
-# ============================================================
-# MAIN
-# ============================================================
-
-def main():
-
-    print("🔥 SIXSCONTENT PHASE 2 STARTED")
-
-    print("Waiting for Telegram command...")
-
-    # --------------------------------------------------------
-    # CLEAR OLD TELEGRAM UPDATES
-    # --------------------------------------------------------
-
-    offset = None
-
-    try:
-
-        old_updates = get_updates(
-            timeout=1
-        )
-
-        if old_updates.get("ok"):
-
-            results = old_updates.get(
-                "result",
-                []
-            )
-
-            if results:
-
-                offset = (
-                    results[-1]["update_id"] + 1
+            selected = (
+                choose_pexels_video(
+                    videos
                 )
+            )
+
+            if not selected:
 
                 print(
-                    "Old Telegram messages cleared."
+                    f"⚠️ No footage for scene {index}"
                 )
-
-    except Exception as e:
-
-        print(
-            f"Could not clear old messages: {e}"
-        )
-
-
-    # --------------------------------------------------------
-    # WAIT FOR ONE NEW COMMAND
-    # --------------------------------------------------------
-
-    while True:
-
-        try:
-
-            data = get_updates(
-                offset=offset,
-                timeout=20
-            )
-
-            if not data.get("ok"):
-
-                time.sleep(2)
 
                 continue
 
-
-            updates = data.get(
-                "result",
-                []
+            link = (
+                choose_download_link(
+                    selected
+                )
             )
 
-
-            for update in updates:
-
-                offset = (
-                    update["update_id"] + 1
-                )
-
-                message = update.get(
-                    "message"
-                )
-
-                if not message:
-
-                    continue
-
-
-                chat_id = message["chat"]["id"]
-
-                text = message.get(
-                    "text",
-                    ""
-                )
-
-
-                if not text:
-
-                    continue
-
+            if not link:
 
                 print(
-                    f"Telegram command: {text}"
+                    f"⚠️ No download link for scene {index}"
                 )
 
+                continue
 
-                should_stop = handle_message(
-                    chat_id,
-                    text
-                )
-
-
-                # ------------------------------------------------
-                # AUTOMATICALLY STOP AFTER /create
-                # ------------------------------------------------
-
-                if should_stop:
-
-                    print(
-                        "🔥 Content request finished."
-                    )
-
-                    print(
-                        "🛑 Stopping GitHub session."
-                    )
-
-                    return
-
-
-        except requests.exceptions.RequestException as e:
-
-            print(
-                f"Telegram connection error: {e}"
+            output = (
+                DOWNLOAD_DIR /
+                f"scene_{index:02d}.mp4"
             )
 
-            time.sleep(5)
+            download_file(
+                link,
+                output
+            )
 
+            raw_files.append(
+                output
+            )
+
+            print(
+                f"✅ Scene {index} ready."
+            )
 
         except Exception as e:
 
             print(
-                f"Unexpected error: {e}"
+                f"⚠️ Scene {index} failed: {e}"
             )
 
-            time.sleep(5)
+    if not raw_files:
+
+        raise RuntimeError(
+            "No Pexels footage was downloaded."
+        )
+
+    return raw_files
 
 
 # ============================================================
-# START
+# VOICE
 # ============================================================
 
-if __name__ == "__main__":
+def generate_voice(script):
 
-    main()
+    print("=" * 70)
+    print("🎙️ GENERATING FAST VOICE-OVER")
+    print("=" * 70)
+
+    import edge_tts
+
+    voice = (
+        "en-US-ChristopherNeural"
+    )
+
+    SCRIPT_FILE.write_text(
+        script,
+        encoding="utf-8"
+    )
+
+    async def create():
+
+        communicate = edge_tts.Communicate(
+            script,
+            voice,
+            rate="+18%",
+            volume="+0%"
+        )
+
+        await communicate.save(
+            str(VOICE_FILE)
+        )
+
+    asyncio.run(
+        create()
+    )
+
+    if not VOICE_FILE.exists():
+
+        raise RuntimeError(
+            "Voice-over was not created."
+        )
+
+    duration = get_duration(
+        VOICE_FILE
+    )
+
+    print(
+        f"✅ Voice-over created."
+    )
+
+    print(
+        f"⏱️ Voice duration: "
+        f"{duration:.2f}s"
+    )
+
+    return duration
+
+
+# ============================================================
+# CAPTIONS
+# ============================================================
+
+def srt_time(seconds):
+
+    milliseconds = int(
+        round(seconds * 1000)
+    )
+
+    hours = (
+        milliseconds //
+        3600000
+    )
+
+    milliseconds %= 3600000
+
+    minutes = (
+        milliseconds //
+        60000
+    )
+
+    milliseconds %= 60000
+
+    seconds_value = (
+        milliseconds //
+        1000
+    )
+
+    milliseconds %= 1000
+
+    return (
+        f"{hours:02d}:"
+        f"{minutes:02d}:"
+        f"{seconds_value:02d},"
+        f"{milliseconds:03d}"
+    )
+
+
+def create_captions(
+    script,
+    audio_duration
+):
+
+    print("=" * 70)
+    print("📝 CREATING SYNCHRONIZED CAPTIONS")
+    print("=" * 70)
+
+    words = script.split()
+
+    if not words:
+
+        raise RuntimeError(
+            "Script contains no words."
+        )
+
+    # Short chunks make captions feel faster.
+    chunks = []
+
+    current = []
+
+    for word in words:
+
+        current.append(
+            word
+        )
+
+        if (
+         
