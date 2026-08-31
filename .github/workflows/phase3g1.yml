@@ -1,0 +1,854 @@
+name: SixsContent Phase 3G
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+
+  phase3g:
+
+    name: High Retention Video Editor
+
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 15
+
+    steps:
+
+      # ======================================================
+      # CHECKOUT
+      # ======================================================
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      # ======================================================
+      # INSTALL FFMPEG
+      # ======================================================
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+
+      # ======================================================
+      # INSTALL PYTHON
+      # ======================================================
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+
+      # ======================================================
+      # INSTALL REQUESTS
+      # ======================================================
+
+      - name: Install Python packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+
+      # ======================================================
+      # DOWNLOAD PHASE 3D-2 ARTIFACT
+      # ======================================================
+
+      - name: Download latest successful Phase 3D-2 artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+
+        run: |
+
+          python - <<'PY'
+
+          import os
+          import sys
+          import zipfile
+          import requests
+
+          from pathlib import Path
+
+
+          repo = os.environ["REPO"]
+
+          token = os.environ["GH_TOKEN"]
+
+
+          headers = {
+
+              "Authorization":
+                  f"Bearer {token}",
+
+              "Accept":
+                  "application/vnd.github+json",
+
+              "X-GitHub-Api-Version":
+                  "2022-11-28"
+          }
+
+
+          print("=" * 60)
+
+          print(
+              "SIXSCONTENT — PHASE 3G"
+          )
+
+          print(
+              "DOWNLOADING PHASE 3D-2 ARTIFACT"
+          )
+
+          print("=" * 60)
+
+
+          # --------------------------------------------------
+          # FIND SUCCESSFUL PHASE 3D-2 RUNS
+          # --------------------------------------------------
+
+          runs_url = (
+
+              f"https://api.github.com/repos/"
+              f"{repo}/actions/workflows/"
+              f"phase3d2.yml/runs"
+
+          )
+
+
+          response = requests.get(
+
+              runs_url,
+
+              headers=headers,
+
+              params={
+
+                  "status":
+                      "success",
+
+                  "per_page":
+                      20
+              },
+
+              timeout=30
+          )
+
+
+          if response.status_code != 200:
+
+              print(
+                  "❌ Could not query Phase 3D-2."
+              )
+
+              print(
+                  response.status_code
+              )
+
+              print(
+                  response.text
+              )
+
+              sys.exit(1)
+
+
+          runs = response.json().get(
+              "workflow_runs",
+              []
+          )
+
+
+          if not runs:
+
+              print(
+                  "❌ No successful Phase 3D-2 runs found."
+              )
+
+              sys.exit(1)
+
+
+          artifact = None
+
+
+          # --------------------------------------------------
+          # FIND ARTIFACT
+          # --------------------------------------------------
+
+          for run in runs:
+
+              run_id = run["id"]
+
+              print(
+                  f"🔎 Checking run {run_id}..."
+              )
+
+
+              artifacts_url = (
+
+                  f"https://api.github.com/repos/"
+                  f"{repo}/actions/runs/"
+                  f"{run_id}/artifacts"
+
+              )
+
+
+              ar = requests.get(
+
+                  artifacts_url,
+
+                  headers=headers,
+
+                  params={
+                      "per_page": 100
+                  },
+
+                  timeout=30
+              )
+
+
+              if ar.status_code != 200:
+
+                  print(
+                      "⚠️ Could not inspect run."
+                  )
+
+                  continue
+
+
+              artifacts = ar.json().get(
+                  "artifacts",
+                  []
+              )
+
+
+              for item in artifacts:
+
+                  name = item.get(
+                      "name",
+                      ""
+                  )
+
+                  expired = item.get(
+                      "expired",
+                      False
+                  )
+
+
+                  print(
+                      f"   Artifact: {name}"
+                  )
+
+
+                  if (
+
+                      name == "phase3d2-video"
+
+                      and not expired
+
+                  ):
+
+                      artifact = item
+
+                      break
+
+
+              if artifact:
+
+                  break
+
+
+          if not artifact:
+
+              print(
+                  "❌ Phase 3D-2 artifact not found."
+              )
+
+              sys.exit(1)
+
+
+          artifact_id = artifact["id"]
+
+
+          print(
+              f"✅ Artifact ID: "
+              f"{artifact_id}"
+          )
+
+
+          # --------------------------------------------------
+          # DOWNLOAD
+          # --------------------------------------------------
+
+          download_url = (
+
+              f"https://api.github.com/repos/"
+              f"{repo}/actions/artifacts/"
+              f"{artifact_id}/zip"
+
+          )
+
+
+          print(
+              "⬇️ Downloading artifact..."
+          )
+
+
+          r = requests.get(
+
+              download_url,
+
+              headers=headers,
+
+              timeout=120,
+
+              allow_redirects=True
+          )
+
+
+          if r.status_code != 200:
+
+              print(
+                  "❌ Artifact download failed."
+              )
+
+              print(
+                  "HTTP:",
+                  r.status_code
+              )
+
+              sys.exit(1)
+
+
+          artifact_zip = Path(
+              "phase3d2-video.zip"
+          )
+
+
+          artifact_zip.write_bytes(
+              r.content
+          )
+
+
+          print(
+              "✅ Artifact downloaded:"
+              f" {artifact_zip.stat().st_size:,} bytes"
+          )
+
+
+          # --------------------------------------------------
+          # EXTRACT
+          # --------------------------------------------------
+
+          extract_dir = Path(
+              "phase3d2_input_raw"
+          )
+
+
+          extract_dir.mkdir(
+              exist_ok=True
+          )
+
+
+          with zipfile.ZipFile(
+              artifact_zip,
+              "r"
+          ) as z:
+
+              print(
+                  "📦 Artifact contents:"
+              )
+
+              for name in z.namelist():
+
+                  print(
+                      " -",
+                      name
+                  )
+
+              z.extractall(
+                  extract_dir
+              )
+
+
+          # --------------------------------------------------
+          # FIND VIDEO
+          # --------------------------------------------------
+
+          videos = list(
+              extract_dir.rglob(
+                  "*.mp4"
+              )
+          )
+
+
+          if not videos:
+
+              print(
+                  "❌ No MP4 found."
+              )
+
+              sys.exit(1)
+
+
+          preferred = [
+
+              p
+
+              for p in videos
+
+              if p.name ==
+              "sixscontent_phase3d2.mp4"
+
+          ]
+
+
+          source = (
+              preferred[0]
+              if preferred
+              else videos[0]
+          )
+
+
+          output_dir = Path(
+              "phase3g_input"
+          )
+
+
+          output_dir.mkdir(
+              exist_ok=True
+          )
+
+
+          destination = (
+
+              output_dir /
+              "sixscontent_phase3d2.mp4"
+
+          )
+
+
+          destination.write_bytes(
+              source.read_bytes()
+          )
+
+
+          print(
+              "✅ Phase 3D-2 video ready:"
+          )
+
+          print(
+              destination
+          )
+
+          PY
+
+
+      # ======================================================
+      # DOWNLOAD PHASE 3E ARTIFACT
+      # ======================================================
+
+      - name: Download latest successful Phase 3E artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+
+        run: |
+
+          python - <<'PY'
+
+          import os
+          import sys
+          import zipfile
+          import requests
+
+          from pathlib import Path
+
+
+          repo = os.environ["REPO"]
+
+          token = os.environ["GH_TOKEN"]
+
+
+          headers = {
+
+              "Authorization":
+                  f"Bearer {token}",
+
+              "Accept":
+                  "application/vnd.github+json",
+
+              "X-GitHub-Api-Version":
+                  "2022-11-28"
+          }
+
+
+          print("=" * 60)
+
+          print(
+              "DOWNLOADING PHASE 3E ASSETS"
+          )
+
+          print("=" * 60)
+
+
+          runs_url = (
+
+              f"https://api.github.com/repos/"
+              f"{repo}/actions/workflows/"
+              f"phase3e.yml/runs"
+
+          )
+
+
+          response = requests.get(
+
+              runs_url,
+
+              headers=headers,
+
+              params={
+
+                  "status":
+                      "success",
+
+                  "per_page":
+                      20
+              },
+
+              timeout=30
+          )
+
+
+          if response.status_code != 200:
+
+              print(
+                  "❌ Could not query Phase 3E."
+              )
+
+              sys.exit(1)
+
+
+          runs = response.json().get(
+              "workflow_runs",
+              []
+          )
+
+
+          if not runs:
+
+              print(
+                  "❌ No successful Phase 3E runs."
+              )
+
+              sys.exit(1)
+
+
+          artifact = None
+
+
+          for run in runs:
+
+              run_id = run["id"]
+
+
+              artifacts_url = (
+
+                  f"https://api.github.com/repos/"
+                  f"{repo}/actions/runs/"
+                  f"{run_id}/artifacts"
+
+              )
+
+
+              ar = requests.get(
+
+                  artifacts_url,
+
+                  headers=headers,
+
+                  params={
+                      "per_page": 100
+                  },
+
+                  timeout=30
+              )
+
+
+              if ar.status_code != 200:
+
+                  continue
+
+
+              artifacts = ar.json().get(
+                  "artifacts",
+                  []
+              )
+
+
+              for item in artifacts:
+
+                  if (
+
+                      item.get("name")
+                      == "phase3e-final-video"
+
+                      and not item.get(
+                          "expired",
+                          False
+                      )
+
+                  ):
+
+                      artifact = item
+
+                      break
+
+
+              if artifact:
+
+                  break
+
+
+          if not artifact:
+
+              print(
+                  "❌ Phase 3E artifact not found."
+              )
+
+              sys.exit(1)
+
+
+          artifact_id = artifact["id"]
+
+
+          download_url = (
+
+              f"https://api.github.com/repos/"
+              f"{repo}/actions/artifacts/"
+              f"{artifact_id}/zip"
+
+          )
+
+
+          print(
+              f"⬇️ Downloading artifact "
+              f"{artifact_id}..."
+          )
+
+
+          r = requests.get(
+
+              download_url,
+
+              headers=headers,
+
+              timeout=120
+          )
+
+
+          if r.status_code != 200:
+
+              print(
+                  "❌ Download failed."
+              )
+
+              sys.exit(1)
+
+
+          zip_path = Path(
+              "phase3e-assets.zip"
+          )
+
+
+          zip_path.write_bytes(
+              r.content
+          )
+
+
+          extract_dir = Path(
+              "phase3e_input"
+          )
+
+
+          extract_dir.mkdir(
+              exist_ok=True
+          )
+
+
+          with zipfile.ZipFile(
+              zip_path,
+              "r"
+          ) as z:
+
+              print(
+                  "📦 Phase 3E contents:"
+              )
+
+              for name in z.namelist():
+
+                  print(
+                      " -",
+                      name
+                  )
+
+              z.extractall(
+                  extract_dir
+              )
+
+
+          # --------------------------------------------------
+          # FIND VOICE
+          # --------------------------------------------------
+
+          voices = list(
+              extract_dir.rglob(
+                  "*.mp3"
+              )
+          )
+
+
+          if not voices:
+
+              print(
+                  "❌ No voice-over MP3 found."
+              )
+
+              sys.exit(1)
+
+
+          voice = next(
+
+              (
+                  p for p in voices
+
+                  if p.name ==
+                  "voiceover.mp3"
+              ),
+
+              voices[0]
+
+          )
+
+
+          destination_voice = (
+
+              Path("phase3g_input")
+              / "voiceover.mp3"
+
+          )
+
+
+          destination_voice.write_bytes(
+              voice.read_bytes()
+          )
+
+
+          # --------------------------------------------------
+          # FIND SRT
+          # --------------------------------------------------
+
+          srts = list(
+              extract_dir.rglob(
+                  "*.srt"
+              )
+          )
+
+
+          if not srts:
+
+              print(
+                  "❌ No captions SRT found."
+              )
+
+              sys.exit(1)
+
+
+          srt = next(
+
+              (
+                  p for p in srts
+
+                  if p.name ==
+                  "captions.srt"
+              ),
+
+              srts[0]
+
+          )
+
+
+          destination_srt = (
+
+              Path("phase3g_input")
+              / "captions.srt"
+
+          )
+
+
+          destination_srt.write_bytes(
+              srt.read_bytes()
+          )
+
+
+          print(
+              "✅ Voice-over copied."
+          )
+
+          print(
+              "✅ Captions copied."
+          )
+
+          PY
+
+
+      # ======================================================
+      # RUN PHASE 3G
+      # ======================================================
+
+      - name: Run Phase 3G
+        run: |
+          python phase3g.py
+
+
+      # ======================================================
+      # VALIDATE OUTPUT
+      # ======================================================
+
+      - name: Validate Phase 3G output
+        run: |
+
+          test -f phase3g_output/sixscontent_phase3g.mp4
+
+          test -f phase3g_output/captions_fast.srt
+
+          test -f phase3g_output/phase3g_metadata.json
+
+          ffprobe \
+            -v error \
+            -show_entries format=duration \
+            -of default=noprint_wrappers=1:nokey=1 \
+            phase3g_output/sixscontent_phase3g.mp4
+
+
+      # ======================================================
+      # UPLOAD ARTIFACT
+      # ======================================================
+
+      - name: Upload Phase 3G package
+        uses: actions/upload-artifact@v4
+
+        with:
+
+          name: phase3g-final-package
+
+          path: phase3g_output/
+
+          if-no-files-found: error
+
+          retention-days: 7
