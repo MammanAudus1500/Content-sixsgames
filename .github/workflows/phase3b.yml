@@ -1,0 +1,36 @@
+name: SixsContent Phase 3B
+
+on:
+  workflow_dispatch:
+
+jobs:
+  phase3b:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install requests google-genai
+
+      - name: Run Phase 3B
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+        run: |
+          python phase3b_test.py
+
+      - name: Upload downloaded clips
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase3b-clips
+          path: phase3b_clips/
+          if-no-files-found: warn
